@@ -1,0 +1,402 @@
+#!/bin/bash
+#
+# Copyright (C) 2010,2011
+# David A. C. Beck
+# dacb@u.washington.edu
+# Chemical Engineering & eScience Institute
+# University of Washington, Seattle
+#
+# Date: 12/02/2010
+# See version and usage information below
+#
+# Updated: 3/14/2011
+# Added region file and miniplot
+# Made draw.awk and label.awk generic versions that can be used to perform
+# almost all GNUplot input generation.
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
+PROGNAME=${0##*/}
+PROGVERSION=0.7.0
+
+HOME=`dirname $0`
+
+usage()
+{
+cat << EOF
+
+Usage: $0 [options] <genbank genome file>
+
+This script creates a multipage PDF containing a genome browser view.  Data may be
+mapped onto the view through options.
+
+Options:
+EOF
+cat << EOF | column -s\& -t
+  -h|--help & Show this message
+  -v|--version & Show version information
+  -d|--debug & produce debugging information where possible
+  -w|--width-of-row <# of bps in each row> & The number of bases in each row, default = 20000
+  -p|--rows-per-page <rows per page> & The number of rows to plot on each page, default = 20
+  -o|--output-PDF-file <name of output file> & The name of the output PDF file
+  -g|--output-GNUplot-file <name of output file> & The name of the output GNUplot file used to make the PDF
+  -t|--output-text-file <name of output file> & The name of the output text file
+  -a|--arrow-color-file <filename> & Filename of locus tag arrow color data
+  -s|--arrow-size-file <filename> & Filename of locus tag arrow size data
+  -m|--mini-plot-file <filename> & Filename of mini plot vs bp
+  -f|--mini-plot-filled & Should the mini plot be filled
+  -g|--mini-plot-red-green & Should the mini plot be colored red above zero and green below
+  -k|--astericks-file <filename> & Filename of locus tag astericks 
+  -b|--bar-color-file <filename> & Filename of locus tag bar color data
+  -x|--box-file <filename> & Filename of locus tag box
+  -r|--region-file <filename> & Filename of genome region data (start, stop, colors, etc.)
+
+EOF
+}
+
+defined()
+{
+[ "${!1-one}" == "${!1-two}" ]
+}
+
+is_file_readable()
+{
+file=$1
+if [ ! -r $file ]; then
+	echo "$0: unable to read file: $file"
+	exit 1
+fi
+}
+
+setup_temp_file()
+{
+	local tmp=`basename $0`
+	TMPFILE=`mktemp -q /tmp/${tmp}.XXXXXX`
+	if [ $? -ne 0 ]; then
+		echo "$0: unable to create temporary file"
+		exit 1
+	fi
+}
+
+# parse arguments
+SHORTOPTS="hvdw:p:o:g:t:a:s:m:x:k:fgb:r:"
+LONGOPTS="help,version,debug,witdh-of-row:,rows-per-page:,output-PDF-file:,output-GNUplot-file:,output-text-file:,arrow-color-file:,arrow-size-file:,mini-plot-file:,mini-plot-filled,mini-plot-red-green,bar-color-file:astericks-file:box-file:region-file:"
+ARGS=$(getopt -s bash --options $SHORTOPTS --longoptions $LONGOPTS --name $PROGNAME -- "$@")
+if [ $? != 0 ]; then usage; exit 1; fi
+eval set -- "$ARGS"
+# loop through options
+while true; do
+	case $1 in
+		-h|--help)
+			usage
+			exit 0
+			;;
+		-v|--version)
+			echo "$PROGVERSION"
+			exit 0
+			;;
+		-d|--debug)
+			DEBUG=1
+			shift 1
+			;;
+		-w|--width-of-row)
+			WIDTH_OF_ROW=$2
+			shift 2
+			;;
+		-p|--rows-per-page)
+			ROWS_PER_PAGE=$2
+			shift 2
+			;;
+		-o|--output-PDF-file)
+			OUTPUT_PDF_FILE=$2
+			shift 2
+			;;
+		-g|--output-GNUplot-file)
+			OUTPUT_GNUPLOT_FILE=$2
+			shift 2
+			;;
+		-t|--output-text-file)
+			OUTPUT_TXT_FILE=$2
+			shift 2
+			;;
+		-a|--arrow-color-file)
+			ARROW_COLOR_FILE=$2
+			shift 2
+			;;
+		-s|--arrow-size-file)
+			ARROW_SIZE_FILE=$2
+			shift 2
+			;;
+		-m|--mini-plot-file)
+			MINI_PLOT_FILE=$2
+			shift 2
+			;;
+		-f|--mini-plot-filled)
+			MINI_PLOT_FILLED=1
+			shift 
+			;;
+		-g|--mini-plot-red-green)
+			MINI_PLOT_RED_GREEN=1
+			shift 
+			;;
+		-b|--bar-color-file)
+			BAR_COLOR_FILE=$2
+			shift 2
+			;;
+		-k|--astericks-file)
+			ASTERICKS_FILE=$2
+			shift 2
+			;;
+		-x|--box-file)
+			BOX_FILE=$2
+			shift 2
+			;;
+		-r|--region-file)
+			REGION_FILE=$2
+			shift 2
+			;;
+		--) 
+			shift
+			break
+			;;
+		*) 
+			shift
+			break
+			;;
+	esac
+done
+
+if [ "$#" -ne 1 ]; then
+	usage
+	exit 1
+fi
+
+GENBANK=$1
+is_file_readable $GENBANK
+
+defined WIDTH_OF_ROW || WIDTH_OF_ROW=20000
+defined ROWS_PER_PAGE || ROWS_PER_PAGE=20
+defined OUTPUT_PDF_FILE || OUTPUT_PDF_FILE=$GENBANK.pdf
+defined OUTPUT_GNUPLOT_FILE || OUTPUT_GNUPLOT_FILE=$GENBANK.gplt
+defined OUTPUT_TXT_FILE || OUTPUT_TXT_FILE=$GENBANK.txt
+defined DEBUG || DEBUG=0
+
+if [ "$DEBUG" -eq 1 ]; then
+	echo "debugging enabled"
+fi
+
+echo "plotting data from $GENBANK"
+echo "each row will contain about $WIDTH_OF_ROW bases"
+echo "each page will have $ROWS_PER_PAGE"
+echo "PDF will be written to $OUTPUT_PDF_FILE"
+echo "GNUplot input will be written to $OUTPUT_GNUPLOT_FILE"
+echo "text output will be written to $OUTPUT_TXT_FILE"
+# argument processing is complete
+setup_temp_file
+echo "using $TMPFILE as the temporary file"
+
+echo ""
+
+if [ ! -z "$MINI_PLOT_FILE" ]; then
+	echo "getting miniplot data from $MINI_PLOT_FILE"
+fi
+if [ ! -z "$ARROW_COLOR_FILE" ]; then
+	echo "getting arrow color data from $ARROW_COLOR_FILE"
+fi
+if [ ! -z "$ARROW_SIZE_FILE" ]; then
+	echo "getting arrow size data from $ARROW_SIZE_FILE"
+fi
+if [ ! -z "$BAR_COLOR_FILE" ]; then
+	echo "getting bar color data from $BAR_COLOR_FILE"
+fi
+if [ ! -z "$ASTERICKS_FILE" ]; then
+	echo "getting astericks data from $ASTERICKS_FILE"
+fi
+if [ ! -z "$BOX_FILE" ]; then
+	echo "getting box data from $BOX_FILE"
+fi
+if [ ! -z "$REGION_FILE" ]; then
+	echo "getting genome region data from $REGION_FILE"
+fi
+
+# parse genbank
+echo ""
+echo "parsing genbank file $GENBANK into $OUTPUT_TXT_FILE"
+awk -f $HOME/gb2txt.awk $GENBANK | sort > $OUTPUT_TXT_FILE
+echo "found `wc -l $OUTPUT_TXT_FILE | awk '{ print $1 }'` features"
+echo "found `awk -F'\t' '{ print $3 }' $OUTPUT_TXT_FILE | sort | uniq | wc -l` loci"
+LOCI=`awk -F'\t' '{ print $3 }' $OUTPUT_TXT_FILE | sort | uniq`
+
+# create GNUplot file
+echo ""
+echo "creating GNUplot file $OUTPUT_GNUPLOT_FILE"
+cat << EOF > $OUTPUT_GNUPLOT_FILE
+set terminal pdf color solid enhanced size 9.5in,7in
+set output '$OUTPUT_PDF_FILE'
+
+set style arrow 1 nohead filled size screen 0.01,0.01
+set style arrow 2 head filled size screen 0.01,15
+set style arrow 3 nohead filled size screen 0.01,15
+
+unset ytics
+unset xtics
+set x2tics
+set x2label 'bp'
+
+set nokey
+
+unset border
+set border 4
+set bmargin at screen 0.05
+set tmargin at screen 0.95
+set lmargin at screen 0.05
+set rmargin at screen 0.95
+
+f(x) = 3
+EOF
+
+for locus in $LOCI
+do
+	cat << EOF >> $OUTPUT_GNUPLOT_FILE
+
+#### start of locus $locus ####
+EOF
+	echo ""
+	echo "creating GNUplot input for locus $locus"
+
+	# setup variables for locus
+	max_rows=`awk -F'\t' -v locus="$locus" -v width=$WIDTH_OF_ROW 'BEGIN { max = -1 } { if ($3 == locus) { row = int($5 / width); if (row > max) max = row; } } END { print max; }' $OUTPUT_TXT_FILE`
+	pages=$(( max_rows / ROWS_PER_PAGE + 1 ))
+	echo "number of pages will be $pages and with a total number of rows of $max_rows"
+	true_rows_per_page=$(( $ROWS_PER_PAGE + 2 ))
+
+	# create pages
+	for page in `jot $pages`
+	do
+		pm1=$(( page - 1))
+		srow=$(( (pm1 * ROWS_PER_PAGE) * -1 ))
+		if [ "$pm1" -eq 0 ]; then
+			srow=$(( srow + 1 ))
+		fi
+		erow=$(( (page * ROWS_PER_PAGE) * -1 ))
+
+		echo "page $page $srow $erow"
+
+		cat << EOF >> $OUTPUT_GNUPLOT_FILE
+
+#### start of page $page ####
+unset label
+unset arrow
+EOF
+
+		# add line labels
+		jot $true_rows_per_page $srow $erow | awk -v locus="$locus" -v width=$WIDTH_OF_ROW '{ if (line > 0) printf("set label \"%dkb-%dkb\" at %d,%f rotate by -270 font \"Helvetica,3\"\n", (-$1 * width) / 1000, ((-$1 + 1) * width) / 1000, -200, $1 - .3); line++; }' >> $OUTPUT_GNUPLOT_FILE
+
+		# add the miniplot 1st (so that it shows up behind everything else)
+		if [ ! -z "$MINI_PLOT_FILE" ]; then
+			max_mp_value=`awk -F'\t' -v locus="$locus" '{ if ($2 > max) max = $2; } END { print max }' $MINI_PLOT_FILE`
+			awk -F'\t' -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW -v max_mp_value=$max_mp_value '{ row = int(-$1 / width); $1 += row * width; if (row < srow && row >= erow) { printf("set arrow from %d,%d to %d,%f as 1 lw 0.01 lt rgb \"#040404\"\n", $1, row - .1, $1, row + ($2 / max_mp_value) * .2); } }' $MINI_PLOT_FILE >> $OUTPUT_GNUPLOT_FILE
+		fi
+
+		# add the gneome region next (again so that it shows up behind most everything else)
+		if [ ! -z "$REGION_FILE" ]; then
+			echo "# -= begin region" >> $OUTPUT_GNUPLOT_FILE
+			awk -F'\t' -v start_col=2 -v end_col=3 -v color_col=4 -v size_col=5 -v locus="$locus" -v locus_col=1 -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW -v offset=-0.1 -v nohead=1 -v debug=$DEBUG -f $HOME/draw.awk $REGION_FILE >> $OUTPUT_GNUPLOT_FILE
+			echo "# -= end region" >> $OUTPUT_GNUPLOT_FILE
+		fi
+
+		# add arrows
+		if [ -z "$ARROW_COLOR_FILE" ]; then
+			awk -F'\t' '{ printf("%s\t%s\n", $1, "black"); }' $OUTPUT_TXT_FILE > $TMPFILE.1
+		else
+			sort $ARROW_COLOR_FILE > $TMPFILE.1
+		fi
+		if [ -z "$ARROW_SIZE_FILE" ]; then
+			awk -F'\t' '{ printf("%s\t%s\n", $1, .5); }' $OUTPUT_TXT_FILE > $TMPFILE.2
+		else
+			sort $ARROW_SIZE_FILE > $TMPFILE.2
+		fi
+		join -t $'\t' $OUTPUT_TXT_FILE $TMPFILE.1 > $TMPFILE.3
+		join -t $'\t' $TMPFILE.3 $TMPFILE.2 > $TMPFILE
+		rm $TMPFILE.1 $TMPFILE.2 $TMPFILE.3
+		echo "# -= begin arrow" >> $OUTPUT_GNUPLOT_FILE
+		awk -F'\t' -v start_col=5 -v end_col=6 -v color_col=10 -v size_col=11 -v locus="$locus" -v locus_col=3 -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW -v debug=$DEBUG -f $HOME/draw.awk $TMPFILE >> $OUTPUT_GNUPLOT_FILE
+		echo "# -= end arrow" >> $OUTPUT_GNUPLOT_FILE
+		rm $TMPFILE
+
+		# gene symbol (not implemented), needs argument for gene symbol file
+		#awk -F'\t' -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW '{ row = int(-$5 / width); $5 += row * width; $6 += row * width; if ($11 != "") if (row < srow && row >= erow) printf("set label \"%s\" at %d,%f\n", $11, $5, row + .2); }' $TMPFILE >> $OUTPUT_GNUPLOT_FILE
+
+		# bar
+		if [ ! -z "$BAR_COLOR_FILE" ]; then
+			sort $BAR_COLOR_FILE > $TMPFILE.1
+			join -t $'\t' $OUTPUT_TXT_FILE $TMPFILE.1 > $TMPFILE
+			echo "# -= begin bar" >> $OUTPUT_GNUPLOT_FILE
+			awk -F'\t' -v start_col=5 -v end_col=6 -v color_col=10 -v size_col=11 -v locus="$locus" -v locus_col=3 -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW -v offset=-0.2 -v nohead=1 -v debug=$DEBUG -f $HOME/draw.awk $TMPFILE >> $OUTPUT_GNUPLOT_FILE
+			echo "# -= end bar" >> $OUTPUT_GNUPLOT_FILE
+			rm $TMPFILE $TMPFILE.1
+		fi
+
+		# box around tags in box file
+		if [ ! -z "$BOX_FILE" ]; then
+			sort $BOX_FILE > $TMPFILE.1
+			join -t $'\t' $OUTPUT_TXT_FILE $TMPFILE.1 > $TMPFILE
+			echo "# -= begin box" >> $OUTPUT_GNUPLOT_FILE
+			awk -F'\t' -v locus="$locus" -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW '{ if ($3 == locus) { row = int(-$5 / width); $5 += row * width; $6 += row * width; if(row < srow && row >= erow) { printf("set arrow from %d,%f to %d,%f nohead lw 1 lt rgb \"black\"\n", $5, row + .1, $6, row + .1); printf("set arrow from %d,%f to %d,%f nohead lw 1 lt rgb \"black\"\n", $6, row + .1, $6, row - .1); printf("set arrow from %d,%f to %d,%f nohead lw 1 lt rgb \"black\"\n", $6, row - .1, $5, row - .1); printf("set arrow from %d,%f to %d,%f nohead lw 1 lt rgb \"black\"\n", $5, row - .1, $5, row + .1); } } }' $TMPFILE >> $OUTPUT_GNUPLOT_FILE
+			echo "# -= end box" >> $OUTPUT_GNUPLOT_FILE
+			rm $TMPFILE $TMPFILE.1
+		fi
+
+		# function label
+		echo "# -= begin function label" >> $OUTPUT_GNUPLOT_FILE
+		awk -F'\t' -v start_col=5 -v end_col=6 -v label_col=7 -v locus="$locus" -v locus_col=3 -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW -v offset=0.2 -v truncate=1 -v debug=$DEBUG -f $HOME/label.awk $OUTPUT_TXT_FILE >> $OUTPUT_GNUPLOT_FILE
+		echo "# -= end function label" >> $OUTPUT_GNUPLOT_FILE
+
+		# orf label
+		echo "# -= begin orf label" >> $OUTPUT_GNUPLOT_FILE
+		awk -F'\t' '{  orf++; label = $1; sub("_", "\\\\_", label); printf("%s\t%d\t%d\t%s\n", label, $5, $6, $3); }' $OUTPUT_TXT_FILE | awk -F'\t' -v start_col=2 -v end_col=3 -v label_col=1 -v locus="$locus" -v locus_col=4 -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW -v offset=0.4 -v label_every=5 -v debug=$DEBUG -f $HOME/label.awk >> $OUTPUT_GNUPLOT_FILE
+		echo "# -= end orf label" >> $OUTPUT_GNUPLOT_FILE
+
+		# astericks
+		if [ ! -z "$ASTERICKS_FILE" ]; then
+			sort $ASTERICKS_FILE > $TMPFILE.1
+			join -t $'\t' $OUTPUT_TXT_FILE $TMPFILE.1 > $TMPFILE
+			echo "# -= begin astericks label" >> $OUTPUT_GNUPLOT_FILE
+			awk -F'\t' -v start_col=5 -v end_col=6 -v label_col=10 -v locus="$locus" -v locus_col=3 -v srow=$srow -v erow=$erow -v width=$WIDTH_OF_ROW -v offset=0.05 -v debug=$DEBUG -f $HOME/label.awk $TMPFILE >> $OUTPUT_GNUPLOT_FILE
+			echo "# -= end astericks label" >> $OUTPUT_GNUPLOT_FILE
+			rm $TMPFILE $TMPFILE.1
+		fi
+
+		cat << EOF >> $OUTPUT_GNUPLOT_FILE
+set label "Locus $locus" at screen 0.02,0.02
+set label "Page $page of $pages" at screen 0.85,0.02
+plot [0:$WIDTH_OF_ROW][${erow}:${srow}] f(x) lt rgb "black";
+#### end of page $page ####
+EOF
+	done
+
+	cat << EOF >> $OUTPUT_GNUPLOT_FILE
+
+#### end of locus $locus ####
+EOF
+done
+
+# run GNUplot
+echo ""
+echo "running GNUplot with input from $OUTPUT_GNUPLOT_FILE to generate $OUTPUT_PDF_FILE"
+gnuplot $OUTPUT_GNUPLOT_FILE
+
+exit 0
+

@@ -1,0 +1,20 @@
+#!/bin/tcsh
+
+set HOME = /gscratch/esci/dacb/genome_plot
+
+if ($#argv < 2 || $#argv > 3) then
+	echo "usage: values_to_color <filename> <column #> [<option: 0centeredredgreen>]"
+	exit 1
+endif
+
+set file = $argv[1]
+set col  = $argv[2]
+
+if ($#argv == 3) then
+	set option = $argv[3]
+else
+	set option = ""
+endif
+
+awk -v option="$option" -v col=$col -f $HOME/values_to_color.awk $file
+

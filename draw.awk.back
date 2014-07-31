@@ -1,0 +1,74 @@
+BEGIN {
+	printf("# --- begin draw: srow = %d, erow = %d, width = %d, offset = %f, nohead = %d, debug = %d\n",
+		srow, erow, width, offset, nohead, debug);
+}
+
+{
+	HEAD   = 2;	# arrow styles used in gnuplot for a headed arrow
+	NOHEAD = 3;	# or an arrow with no head, i.e. line
+	if (nohead == 1)	# allows a no headed mode
+		HEAD = 3;
+
+	orfsrow = int(-$5 / width);
+	a = $5;
+	$5 += orfsrow * width;
+
+	orferow = int(-$6 / width);
+	b = $6;
+	$6 += orferow * width;
+
+	#printf("#%s\t%d\t%d\t%d\t%d\t%d\t%d\n", $1, a, b, orferow, orfsrow, srow, erow);
+	if ((orfsrow < srow && orfsrow >= erow) || (orferow < srow && orferow >= erow)) {
+		start = ($4 == "+" ? $5 : $6);
+		end = ($4 == "+" ? $6 : $5);
+		color = $10;
+		size = $11;
+		if (debug > 0) printf("#%s\tscoord %d\tecoord %d\t%d\t%d\n", $1, a, b, orferow, orfsrow);
+
+		if (orferow == orfsrow) {
+			# simple one line ORF
+			arrow_style = HEAD;
+			printf("set arrow from %d,%f to %d,%f as %d lw %f lt rgb \"%s\"\n", start, orfsrow + offset, end, orferow + offset, arrow_style, size, color);
+		} else if (orfsrow > srow) {
+			# ends on this page and begins on previous
+		} else if (orferow < erow) {
+			# begins on this page and ends on next
+		} else {
+			# multi-row ORF
+			brow=(orfsrow > orferow ? orfsrow : orferow);
+			mrow=(orfsrow > orferow ? orferow : orfsrow);
+			if (debug > 0) printf("#multi row, brow = %d, mrow = %d\n", brow, mrow);
+			for (i = brow; i >= mrow; --i) {
+				if (i == brow) {
+					if ($4 == "+") {
+						mlstart = $5;
+						mlend = width;
+						arrow_style = NOHEAD;
+					} else {
+						mlstart = width;
+						mlend = $5;
+						arrow_style = HEAD;
+					}
+				} else if (i == mrow) {
+					if ($4 == "+") {
+						mlstart = 0;
+						mlend = $6;
+						arrow_style = HEAD;
+					} else {
+						mlstart = $6;
+						mlend = 0;
+						arrow_style = NOHEAD;
+					}
+				} else { 
+					mlstart = 0;
+					mlend = width;
+				}
+				printf("set arrow from %d,%f to %d,%f as %d lw %f lt rgb \"%s\" # %d\n", mlstart, i + offset, mlend, i + offset, arrow_style, size, color, i);
+			}
+		}
+	}
+}
+END {
+	printf("# --- end draw: srow = %d, erow = %d, width = %d, offset = %f, nohead = %d, debug = %d\n",
+		srow, erow, width, offset, nohead, debug);
+}
